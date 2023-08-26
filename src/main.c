@@ -9,71 +9,79 @@
 #include "driverlib/interrupt.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
+#include "inc/hw_types.h"
+#include "inc/hw_gpio.h"
+#include "driverlib/debug.h"
+#include "driverlib/qei.h"
+#include "driverlib/pin_map.h"
 
-/// \brief interrupt for Timer0A. Toggle between blue and white
-void Timer0AISR(void)
-{
-    TimerIntClear(TIMER0_BASE, TIMER_A);
-    static bool blue = false;
-    if(!blue)
-    {
-        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3, GPIO_PIN_2);
-        blue = true;
-    }
-    else
-    {
-        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3);
-        blue = false;
-    }
-}
+#define VEL_INT_FREQ 10000 // Macro to store the Interrupt frequency of QEI1
+#define QEI1_PPR 257125    // Macro to store the PPR of the QEI1
+
+/* -----------------------      Global Variables        --------------------- */
+volatile uint32_t ui32Qei1Vel; // Variable to store the velocity of QEI1
+volatile uint32_t ui32Qei1Pos; // Variable to store the position of QEI1
+volatile int32_t i32Qei1Dir;   // Variable to store the direction of QEI1
+volatile uint16_t ui16Qei1Rpm; // Variable to store the RPM of QEI1
 
 int main(void)
 {
     // Setup clock frequency to 80MHz
     SysCtlClockSet(
-        SYSCTL_OSC_MAIN        // Use the main oscillator
-        | SYSCTL_XTAL_16MHZ   // which is a 16 MHz crystal
-        | SYSCTL_USE_PLL      // Feed PLL which results in 400 MHz
-        | SYSCTL_SYSDIV_2_5   // (400 MHz /2) /2.5) = 80 MHz
-        );
+        SYSCTL_OSC_MAIN     // Use the main oscillator
+        | SYSCTL_XTAL_16MHZ // which is a 16 MHz crystal
+        | SYSCTL_USE_PLL    // Feed PLL which results in 400 MHz
+        | SYSCTL_SYSDIV_2_5 // (400 MHz /2) /2.5) = 80 MHz
+    );
 
-
-    // Enable the port F pins
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
-    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOF))
+    // Enable Port D pins
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOF))
     {
         ; // do nothing, wait for port to be ready
+        // TODO: Should this fail, maybe implement WDT to make sure we can reset HW
+    }
+    // Enable the port F pins
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOF))
+    {
+        ; // do nothing, wait for port to be ready
+          // TODO: Should this fail, maybe implement WDT to make sure we can reset HW
     }
     // set led pins as outputs
-    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3);
 
-    // Enable the timer0
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
-    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER0))
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3);
+    // Enable QEI Module 0
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_QEI0);
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_QEI0))
     {
-        ; // do nothing wait for the timer module to be ready
+        ; // do nothing, wait for port to be ready
+          // TODO: Should this fail, maybe implement WDT to make sure we can reset HW
     }
 
-    // configure timer0 to run at 1Hz
-    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC); 
+    GPIOPinTypeQEI(GPIO_PORTD_BASE, GPIO_PIN_3 | GPIO_PIN_6 | GPIO_PIN_7); // Make Pin PD3, PD6, PD7 used for index and channel pins
+    GPIOPinConfigure(GPIO_PD3_IDX0);
+    // GPIOPinConfigure(GPIO_PORTD_BASE | GPIO_PIN_6);
+    GPIOPinConfigure(GPIO_PD6_PHA0);
+    GPIOPinConfigure(GPIO_PD7_PHB0);
 
-    // clock frequency is 80Mhz/freq (80000000/1)
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 80000000);
+    QEIConfigure(QEI0_BASE, QEI_CONFIG_CAPTURE_A_B | QEI_CONFIG_RESET_IDX | QEI_CONFIG_QUADRATURE | QEI_CONFIG_NO_SWAP, 1855);
 
-    // Enable the interrupt on the timer
-    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+    // Enable QEI
+    QEIFilterEnable(QEI0_BASE);
+    QEIEnable(QEI0_BASE);
 
-    // Enable timer interrupt on the nvic
-    IntEnable(INT_TIMER0A);
-
-    // Enable the timer itself
-    TimerEnable(TIMER0_BASE, TIMER_A);
+    // Velocity configure
+    QEIVelocityConfigure(QEI1_BASE, QEI_VELDIV_1, 32); // 32 ms period
+    QEIVelocityEnable(QEI1_BASE);
 
     // enable interrupts
     IntMasterEnable();
 
-    for(;;)
+    for (;;)
     {
-        ; // loop forever
+        ui32Qei1Pos = QEIPositionGet(QEI0_BASE);
+        ui32Qei1Vel = QEIVelocityGet(QEI0_BASE);
+        i32Qei1Dir = QEIDirectionGet(QEI0_BASE);
     }
 }
